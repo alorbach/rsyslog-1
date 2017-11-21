@@ -664,7 +664,7 @@ case $1 in
 			fi
 		fi
 		;;
-    'start-zookeeper')
+	 'start-zookeeper')
 		if [ "x$2" == "x" ]; then
 			dep_work_dir=$(readlink -f $srcdir/.dep_wrk)
 			dep_work_tk_config="zoo.cfg"
@@ -700,6 +700,11 @@ case $1 in
 			dep_work_dir=$(readlink -f $srcdir/$2)
 			dep_work_kafka_config="kafka-server$2.properties"
 		fi
+		if [ "x$3" == "x" ]; then
+			testremoteurl="http://localhost:22181"
+		else
+			testremoteurl="http://localhost:$3"
+		fi
 
 		if [ ! -f $dep_kafka_cached_file ]; then
 				echo "Dependency-cache does not have kafka package, did you download dependencies?"
@@ -724,7 +729,6 @@ case $1 in
 		else
 			echo "Starting Kafka instance $dep_work_kafka_config, SECOND ATTEMPT!"
 			(cd $dep_work_dir/kafka && ./bin/kafka-server-start.sh -daemon ./config/$dep_work_kafka_config)
-			./msleep 4000
 
 			kafkapid=`ps aux | grep -i $dep_work_kafka_config | grep java | grep -v grep | awk '{print $2}'`
 			if [[ "" !=  "$kafkapid" ]];
@@ -735,6 +739,23 @@ case $1 in
 				. $srcdir/diag.sh error-exit 77
 			fi
 		fi
+
+
+		# Wait for startup with hardcoded timeout
+		timeoutend=30
+
+		# Try to connect to port
+		curl --silent --connect-timeout $timeoutend $testremoteurl
+		CURL_EXIT=$?
+
+		# Empty response returns 52 which is fine for our test
+		if [ $CURL_EXIT -ne 52 ]
+		then
+			echo "Connect FAIL to Kafka instance on Port $testremoteurl with status ($CURL_EXIT)"
+		else
+			echo "Connect SUCCESS to Kafka instance on Port $testremoteurl"
+		fi
+#			./msleep 4000
 		;;
 	 'dump-kafka-serverlog')
 		if [ "x$2" == "x" ]; then

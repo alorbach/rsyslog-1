@@ -15,9 +15,9 @@ echo \[sndrcv_kafka_multi.sh\]: Create multiple kafka/zookeeper instances and st
 . $srcdir/diag.sh start-zookeeper '.dep_wrk1'
 . $srcdir/diag.sh start-zookeeper '.dep_wrk2'
 . $srcdir/diag.sh start-zookeeper '.dep_wrk3'
-. $srcdir/diag.sh start-kafka '.dep_wrk1'
-. $srcdir/diag.sh start-kafka '.dep_wrk2'
-. $srcdir/diag.sh start-kafka '.dep_wrk3'
+. $srcdir/diag.sh start-kafka '.dep_wrk1' '22181'
+. $srcdir/diag.sh start-kafka '.dep_wrk2' '22182'
+. $srcdir/diag.sh start-kafka '.dep_wrk3' '22183'
 . $srcdir/diag.sh create-kafka-topic 'static' '.dep_wrk1' '22181'
 
 echo \[sndrcv_kafka_multi.sh\]: Starting sender instance [omkafka]
