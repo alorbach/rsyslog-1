@@ -60,6 +60,7 @@ typedef struct nspoll_s nspoll_t;
 typedef enum nsdsel_waitOp_e nsdsel_waitOp_t;
 typedef struct nsd_ptcp_s nsd_ptcp_t;
 typedef struct nsd_gtls_s nsd_gtls_t;
+typedef struct nsd_ossl_s nsd_ossl_t;
 typedef struct nsd_gsspi_s nsd_gsspi_t;
 typedef struct nsd_nss_s nsd_nss_t;
 typedef struct nsdsel_ptcp_s nsdsel_ptcp_t;
