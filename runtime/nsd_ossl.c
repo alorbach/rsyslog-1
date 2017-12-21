@@ -32,6 +32,7 @@
 #include <openssl/bio.h>
 #include <openssl/err.h>
 #include <openssl/x509v3.h>
+#include <openssl/engine.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -46,6 +47,8 @@
 #include "stringbuf.h"
 #include "errmsg.h"
 #include "net.h"
+#include "netstrms.h"
+#include "netstrm.h"
 #include "datetime.h"
 #include "nsd_ptcp.h"
 #include "nsdsel_ossl.h"
@@ -63,6 +66,8 @@ DEFobjStaticHelpers
 DEFobjCurrIf(errmsg)
 DEFobjCurrIf(glbl)
 DEFobjCurrIf(net)
+DEFobjCurrIf(netstrms)
+DEFobjCurrIf(netstrm)
 DEFobjCurrIf(datetime)
 DEFobjCurrIf(nsd_ptcp)
 
@@ -197,6 +202,18 @@ osslRecordRecv(nsd_ossl_t *pThis)
 	}
 
 finalize_it:
+	RETiRet;
+}
+
+/* globally de-initialize OpenSSL */
+static rsRetVal
+osslGlblExit(void)
+{
+	DEFiRet;
+	ENGINE_cleanup();
+	ERR_free_strings();
+	EVP_cleanup();
+	CRYPTO_cleanup_all_ex_data();
 	RETiRet;
 }
 
@@ -414,7 +431,7 @@ LstnInit(netstrms_t *pNS, void *pUsr, rsRetVal(*fAddLstn)(void*,netstrm_t*),
 		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error binding server socket");
 		ABORT_FINALIZE(RS_RET_NO_ERRCODE);
 	}
-	CHKiRet(Construct(&pNewNsd));
+	CHKiRet(nsd_osslConstruct(&pNewNsd));
 	CHKiRet(SetSock(pNewNsd, acc));
 	CHKiRet(SetMode(pNewNsd, netstrms.GetDrvrMode(pNS)));
 	CHKiRet(SetAuthMode(pNewNsd, netstrms.GetDrvrAuthMode(pNS)));
@@ -474,6 +491,16 @@ GetRemoteIP(nsd_t *pNsd, prop_t **ip)
 	RETiRet;
 }
 
+/* Certificate of the peer is checked
+ */
+rsRetVal
+post_connection_check(SSL *ssl)
+{
+	DEFiRet;
+	/*TODO: pascal: check certificate from peer */
+	RETiRet;
+}
+
 /* accept an incoming connection request - here, we do the usual accept
  * handling. TLS specific handling is done thereafter (and if we run in TLS
  * mode at this time).
@@ -528,17 +555,6 @@ finalize_it:
 			nsd_osslDestruct(&pNew);
 		}
 	}
-	RETiRet;
-}
-
-/* Certificate of the peer is checked
- */
-static rsRetVal
-post_connection_check(SSL *ssl)
-{
-	DEFiRet;
-	/*TODO: pascal: check certificate from peer */
-finalize_it:
 	RETiRet;
 }
 
@@ -694,12 +710,22 @@ Connect(nsd_t *pNsd, int family, uchar *port, uchar *host, char *device)
 	BIO *conn;
 	SSL * ssl;
 	long err;
+	char *name;
 
 	ISOBJ_TYPE_assert(pThis, nsd_ossl);
 	assert(port != NULL);
 	assert(host != NULL);
 
-	conn = BIO_new_connect(host ":" port);
+	if((name = malloc(strlen(host)+strlen(port)+2)) != NULL) {
+		name[0] = '\0';
+		strcat(name, host);
+		strcat(name, ":");
+		strcat(name, port);
+	} else {
+		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error: malloc failed");
+	}
+
+	conn = BIO_new_connect(name);
 	if(!conn) {
 		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error creating connection Bio");
 		ABORT_FINALIZE(RS_RET_NO_ERRCODE);
@@ -731,6 +757,9 @@ Connect(nsd_t *pNsd, int family, uchar *port, uchar *host, char *device)
 	}
 
 finalize_it:
+	if(name != NULL) {
+		free(name);
+	}
 	if(iRet != RS_RET_OK) {
 		if(pThis->bHaveSess) {
 			pThis->bHaveSess = 0;
@@ -780,7 +809,7 @@ ENDobjQueryInterface(nsd_ossl)
  */
 BEGINObjClassExit(nsd_ossl, OBJ_IS_LOADABLE_MODULE) /* CHANGE class also in END MACRO! */
 CODESTARTObjClassExit(nsd_ossl)
-	osslGlblExit();	/* shut down GnuTLS */
+	osslGlblExit();	/* shut down OpenSSL */
 
 	/* release objects we no longer need */
 	objRelease(nsd_ptcp, LM_NSD_PTCP_FILENAME);
@@ -788,6 +817,8 @@ CODESTARTObjClassExit(nsd_ossl)
 	objRelease(glbl, CORE_COMPONENT);
 	objRelease(datetime, CORE_COMPONENT);
 	objRelease(errmsg, CORE_COMPONENT);
+	objRelease(netstrm, DONT_LOAD_LIB);
+	objRelease(netstrms, LM_NETSTRMS_FILENAME);
 ENDObjClassExit(nsd_ossl)
 
 /* Initialize the nsd_ossl class. Must be called as the very first method
@@ -799,7 +830,8 @@ BEGINObjClassInit(nsd_ossl, 1, OBJ_IS_LOADABLE_MODULE) /* class, version */
 	CHKiRet(objUse(datetime, CORE_COMPONENT));
 	CHKiRet(objUse(glbl, CORE_COMPONENT));
 	CHKiRet(objUse(net, LM_NET_FILENAME));
-	CHKiRet(objUse(nsd_ptcp, LM_NSD_PTCP_FILENAME));
+	CHKiRet(objUse(netstrms, LM_NETSTRMS_FILENAME));
+	CHKiRet(objUse(netstrm, DONT_LOAD_LIB));
 
 	/* now do global TLS init stuff */
 	CHKiRet(osslGlblInit());

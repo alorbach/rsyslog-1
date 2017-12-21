@@ -76,7 +76,7 @@ Add(nsdsel_t *pNsdsel, nsd_t *pNsd, nsdsel_waitOp_t waitOp)
 	ISOBJ_TYPE_assert(pThis, nsdsel_ossl);
 	ISOBJ_TYPE_assert(pNsdOSSL, nsd_ossl);
 	if(pNsdOSSL->iMode == 1) {
-		if(waitOp == NSDSEL_RD && gtlsHasRcvInBuffer(pNsdOSSL)) {
+		if(waitOp == NSDSEL_RD && osslHasRcvInBuffer(pNsdOSSL)) {
 			++pThis->iBufferRcvReady;
 			dbgprintf("nsdsel_ossl: data already present in buffer, initiating "
 				  "dummy select %p->iBufferRcvReady=%d\n",

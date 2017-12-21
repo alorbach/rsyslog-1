@@ -65,6 +65,7 @@ typedef struct nsd_gsspi_s nsd_gsspi_t;
 typedef struct nsd_nss_s nsd_nss_t;
 typedef struct nsdsel_ptcp_s nsdsel_ptcp_t;
 typedef struct nsdsel_gtls_s nsdsel_gtls_t;
+typedef struct nsdsel_ossl_s nsdsel_ossl_t;
 typedef struct nsdpoll_ptcp_s nsdpoll_ptcp_t;
 typedef struct wti_s wti_t;
 typedef struct msgPropDescr_s msgPropDescr_t;
