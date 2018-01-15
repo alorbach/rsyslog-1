@@ -38,6 +38,8 @@ typedef nsd_if_t nsd_ossl_if_t; /* we just *implement* this interface */
 /* the nsd_gtls object */
 struct nsd_ossl_s {
 	BEGINobjInstance;	/* Data to implement generic object - MUST be the first data element! */
+	uchar *pRemHostName;	/* host name of remote peer */
+	prop_t *remoteIP;	/* IP address of remote peer */
 	int iMode;		/* 0 - plain tcp, 1 - TLS */
 	enum { 
 		OSSL_AUTH_CERTNAME = 0,

@@ -51,6 +51,7 @@
 #include "netstrm.h"
 #include "datetime.h"
 #include "nsd_ptcp.h"
+#include "prop.h"
 #include "nsdsel_ossl.h"
 #include "nsd_ossl.h"
 #include "unicode-helper.h"
@@ -70,6 +71,7 @@ DEFobjCurrIf(netstrms)
 DEFobjCurrIf(netstrm)
 DEFobjCurrIf(datetime)
 DEFobjCurrIf(nsd_ptcp)
+DEFobjCurrIf(prop)
 
 static int bGlblSrvrInitDone = 0;	/**< 0 - server global init not yet done, 1 - already done */
 
@@ -97,6 +99,73 @@ int verify_callback(int status, X509_STORE_CTX *store)
 	return status;
 }
 
+long BIO_debug_callback(BIO *bio, int cmd, const char *argp,
+                        int argi, long argl, long ret)
+{
+    long r = 1;
+
+    if (BIO_CB_RETURN & cmd)
+        r = ret;
+
+    dbgprintf("openssl debug: BIO[%p]: ", (void *)bio);
+
+    switch (cmd) {
+    case BIO_CB_FREE:
+        dbgprintf("openssl debug: Free - %s\n", bio->method->name);
+        break;
+    case BIO_CB_READ:
+        if (bio->method->type & BIO_TYPE_DESCRIPTOR)
+            dbgprintf("openssl debug: read(%d,%lu) - %s fd=%d\n",
+                         bio->num, (unsigned long)argi,
+                         bio->method->name, bio->num);
+        else
+            dbgprintf("openssl debug: read(%d,%lu) - %s\n",
+                         bio->num, (unsigned long)argi, bio->method->name);
+        break;
+    case BIO_CB_WRITE:
+        if (bio->method->type & BIO_TYPE_DESCRIPTOR)
+            dbgprintf("openssl debug: write(%d,%lu) - %s fd=%d\n",
+                         bio->num, (unsigned long)argi,
+                         bio->method->name, bio->num);
+        else
+            dbgprintf("openssl debug: write(%d,%lu) - %s\n",
+                         bio->num, (unsigned long)argi, bio->method->name);
+        break;
+    case BIO_CB_PUTS:
+        dbgprintf("openssl debug: puts() - %s\n", bio->method->name);
+        break;
+    case BIO_CB_GETS:
+        dbgprintf("openssl debug: gets(%lu) - %s\n", (unsigned long)argi,
+                     bio->method->name);
+        break;
+    case BIO_CB_CTRL:
+        dbgprintf("openssl debug: ctrl(%lu) - %s\n", (unsigned long)argi,
+                     bio->method->name);
+        break;
+    case BIO_CB_RETURN | BIO_CB_READ:
+        dbgprintf("openssl debug: read return %ld\n", ret);
+        break;
+    case BIO_CB_RETURN | BIO_CB_WRITE:
+        dbgprintf("openssl debug: write return %ld\n", ret);
+        break;
+    case BIO_CB_RETURN | BIO_CB_GETS:
+        dbgprintf("openssl debug: gets return %ld\n", ret);
+        break;
+    case BIO_CB_RETURN | BIO_CB_PUTS:
+        dbgprintf("openssl debug: puts return %ld\n", ret);
+        break;
+    case BIO_CB_RETURN | BIO_CB_CTRL:
+        dbgprintf("openssl debug: ctrl return %ld\n", ret);
+        break;
+    default:
+        dbgprintf("openssl debug: bio callback - unknown type (%d)\n", cmd);
+        break;
+    }
+
+    return (r);
+}
+
+
 /* globally initialize OpenSSL
  * 
  */
@@ -104,6 +173,7 @@ static rsRetVal
 osslGlblInit(void)
 {
 	DEFiRet;
+	DBGPRINTF("openssl: entering osslGlblInit\n");
 	const char *caFile, *certFile, *keyFile;
 
 	/*TODO: pascal: setup multithreading */
@@ -151,6 +221,10 @@ osslGlblInit(void)
 	/*TODO: pascal: Wie tief sollen Ketten geprüft werden? Zur Zeit 4 */
 	SSL_CTX_set_verify_depth(ctx, 4);
 
+	// TODO: Set timeout to a higher value
+	SSL_CTX_set_timeout(ctx, 5);
+	SSL_CTX_set_mode(ctx, SSL_MODE_AUTO_RETRY);
+
 	bGlblSrvrInitDone = 1;
 
 
@@ -162,12 +236,16 @@ static rsRetVal
 osslInitSession(nsd_ossl_t *pThis)
 {
 	DEFiRet;
+	DBGPRINTF("openssl: entering osslInitSession\n");
 	BIO *client;
 
 	if(!(pThis->ssl = SSL_new(ctx))) {
 		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error creating SSL context");
 	}
 	client = BIO_pop(pThis->acc);
+	
+dbgprintf("osslInitSession: BIO[%p] \n", (void *)client);
+
 	SSL_set_bio(pThis->ssl, client, client);
 	pThis->bHaveSess = 1;
 
@@ -178,10 +256,11 @@ rsRetVal
 osslRecordRecv(nsd_ossl_t *pThis)
 {
 	DEFiRet;
+	DBGPRINTF("openssl: entering osslRecordRecv");
 	ssize_t lenRcvd;
 	int err;
 
-	ISOBJ_TYPE_assert(pThis, nsd_gtls);
+	ISOBJ_TYPE_assert(pThis, nsd_ossl);
 	lenRcvd =  SSL_read(pThis->ssl, pThis->pszRcvBuf, NSD_OSSL_MAX_RCVBUF);
 	if(lenRcvd > 0) {
 		pThis->lenRcvBuf = lenRcvd;
@@ -210,6 +289,7 @@ static rsRetVal
 osslGlblExit(void)
 {
 	DEFiRet;
+	DBGPRINTF("openssl: entering osslGlblExit\n");
 	ENGINE_cleanup();
 	ERR_free_strings();
 	EVP_cleanup();
@@ -222,6 +302,7 @@ static rsRetVal
 osslEndSess(nsd_ossl_t *pThis)
 {
 	DEFiRet;
+	DBGPRINTF("openssl: entering osslEndSess\n");
 	int ret;
 	int err;
 
@@ -247,6 +328,38 @@ osslEndSess(nsd_ossl_t *pThis)
 	RETiRet;
 }
 
+char *
+getLastSSLErrorMsg(int ret, SSL *ssl, char* pszCallSource)
+{
+	unsigned long un_error = 0;
+	char psz[256];
+	int iMyRet = SSL_get_error(ssl, ret);
+
+	/* Check which kind of error we have */
+	DBGPRINTF("Error in Method: %s\n", pszCallSource);
+	if(iMyRet == SSL_ERROR_SSL) {
+		un_error = ERR_peek_last_error();
+		ERR_error_string_n(un_error, psz, 256);
+		errmsg.LogError(0, RS_RET_NO_ERRCODE, "%s", psz);
+	} else if(iMyRet == SSL_ERROR_SYSCALL){
+		iMyRet = ERR_get_error();
+		if(ret == 0) {
+			iMyRet = SSL_get_error(ssl, iMyRet);
+			if(iMyRet = 0) {
+				*psz = '\0';
+			} else {
+				ERR_error_string_n(iMyRet, psz, 256);
+			}
+		} else {
+			un_error = ERR_peek_last_error();
+			ERR_error_string_n(un_error, psz, 256);
+		}
+		errmsg.LogError(0, RS_RET_NO_ERRCODE, "%s", psz);
+	} else {
+		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Unknown SSL Error, SSL_get_error: %d", iMyRet);
+	}
+}
+
 /*--------------------------------End OpenSSL specifics----------------------------------------------*/
 
 /* Standard-Constructor */
@@ -260,6 +373,14 @@ BEGINobjDestruct(nsd_ossl) /* be sure to specify the object type also in END and
 CODESTARTobjDestruct(nsd_ossl)
 	if(pThis->iMode == 1) {
 		osslEndSess(pThis);
+	}
+
+	if(pThis->pRemHostName != NULL) {
+		free(pThis->pRemHostName);
+	}
+
+	if(pThis->remoteIP != NULL) {
+		prop.Destruct(&pThis->remoteIP);
 	}
 
 	if(pThis->acc != NULL) {
@@ -410,7 +531,7 @@ Abort(nsd_t *pNsd)
 
 /* initialize the tcp socket for a listner
  * Here, we use the ptcp driver - because there is nothing special
- * at this point with GnuTLS. Things become special once we accept
+ * at this point with OpenSSL. Things become special once we accept
  * a session, but not during listener setup.
  */
 static rsRetVal
@@ -418,6 +539,7 @@ LstnInit(netstrms_t *pNS, void *pUsr, rsRetVal(*fAddLstn)(void*,netstrm_t*),
 	 uchar *pLstnPort, uchar *pLstnIP, int iSessMax)
 {
 	DEFiRet;
+	DBGPRINTF("openssl: entering LstnInit\n");
 	nsd_t *pNewNsd = NULL;
 	netstrm_t *pNewStrm = NULL;
 	BIO *acc;
@@ -427,11 +549,17 @@ LstnInit(netstrms_t *pNS, void *pUsr, rsRetVal(*fAddLstn)(void*,netstrm_t*),
 		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error creating server socket");
 		ABORT_FINALIZE(RS_RET_NO_ERRCODE);
 	}
+	DBGPRINTF("openssl: Server socket created\n");
 	if(BIO_do_accept(acc) <= 0) {
 		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error binding server socket");
 		ABORT_FINALIZE(RS_RET_NO_ERRCODE);
 	}
+	DBGPRINTF("openssl: Server socket bound\n");
+
+	BIO_set_callback(acc, BIO_debug_callback);
+
 	CHKiRet(nsd_osslConstruct(&pNewNsd));
+dbgprintf("after construct");
 	CHKiRet(SetSock(pNewNsd, acc));
 	CHKiRet(SetMode(pNewNsd, netstrms.GetDrvrMode(pNS)));
 	CHKiRet(SetAuthMode(pNewNsd, netstrms.GetDrvrAuthMode(pNS)));
@@ -442,7 +570,6 @@ LstnInit(netstrms_t *pNS, void *pUsr, rsRetVal(*fAddLstn)(void*,netstrm_t*),
 	CHKiRet(fAddLstn(pUsr, pNewStrm));
 	pNewStrm = NULL;
 	acc = NULL;
-	
 
 finalize_it:
 	if(iRet != RS_RET_OK) {
@@ -459,8 +586,7 @@ finalize_it:
 static rsRetVal
 CheckConnection(nsd_t __attribute__((unused)) *pNsd)
 {
-	DEFiRet;
-	RETiRet;
+
 }
 
 /* get the remote hostname. The returned hostname must be freed by the caller.
@@ -469,6 +595,13 @@ static rsRetVal
 GetRemoteHName(nsd_t *pNsd, uchar **ppszHName)
 {
 	DEFiRet;
+	nsd_ossl_t *pThis = (nsd_ossl_t*) pNsd;
+	ISOBJ_TYPE_assert(pThis, nsd_ossl);
+	assert(ppszHName != NULL);
+	//TODO: how can the RemHost be empty?
+
+	CHKmalloc(*ppszHName = (uchar*)strdup(pThis->pRemHostName == NULL ? "" : (char*) pThis->pRemHostName));
+finalize_it:
 	RETiRet;
 }
 
@@ -488,6 +621,10 @@ static rsRetVal
 GetRemoteIP(nsd_t *pNsd, prop_t **ip)
 {
 	DEFiRet;
+	nsd_ossl_t *pThis = (nsd_ossl_t*) pNsd;
+	ISOBJ_TYPE_assert(pThis, nsd_ossl);
+	prop.AddRef(pThis->remoteIP);
+	*ip = pThis->remoteIP;
 	RETiRet;
 }
 
@@ -509,34 +646,61 @@ static rsRetVal
 AcceptConnReq(nsd_t *pNsd, nsd_t **ppNew)
 {
 	DEFiRet;
+	DBGPRINTF("openssl: entering AcceptConnReq\n");
 	nsd_ossl_t *pNew = NULL;
 	nsd_ossl_t *pThis = (nsd_ossl_t*) pNsd;
 	BIO *client;
 	long err;
+	int ret;
+	int iSocked;
+	struct sockaddr_in addr;
+	socklen_t addr_size;
+	int res;
+	char clientip[20];
 
 	ISOBJ_TYPE_assert((pThis), nsd_ossl);
 	CHKiRet(nsd_osslConstruct(&pNew));
 	BIO_free(pNew->acc);
+dbgprintf("AcceptConnReq: BIO[%p]\n", (void *)pThis->acc);	
 	if(BIO_do_accept(pThis->acc) <= 0) {
 		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error accepting connection");
 		ABORT_FINALIZE(RS_RET_NO_ERRCODE);
 	}
-
+	
 	if(pThis->iMode == 0) {
 		/*we are in non-TLS mode, so we are done */
+		DBGPRINTF("openssl: we are NOT in TLS mode\n");
 		*ppNew = (nsd_t*) pNew;
 		FINALIZE;
 	}
 
+	DBGPRINTF("openssl: we are in TLS mode\n");
 	/*if we reach this point, we are in TLS mode */
-	CHKiRet(osslInitSession(pNew));
+	CHKiRet(osslInitSession(pThis)); // pNew));
+	pNew->ssl = pThis->ssl;
 	pNew->authMode = pThis->authMode;
 	pNew->pPermPeers = pThis->pPermPeers;
 
+	DBGPRINTF("openssl: starting handshake\n");
 	/*we now do the handshake */
-	if(SSL_accept(pNew->ssl) <= 0) {
+dbgprintf("SSL_accept: pNew->ssl[%p]\n", (void *)pNew->ssl);
+	if((ret = SSL_accept(pNew->ssl)) <= 0) {
 		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error accepting SSL connection");
+		getLastSSLErrorMsg(ret, pNew->ssl, "AcceptConnReq");
 	}
+dbgprintf("SSL_accept: after function\n");
+
+dbgprintf("openssl debug: socket client %p\n", SSL_get_fd(pNew->ssl));
+	iSocked = SSL_get_fd(pNew->ssl);
+	addr_size = sizeof(struct sockaddr_in); 
+	res = getpeername(iSocked, (struct sockaddr *)&addr, &addr_size); 
+	strcpy(clientip, inet_ntoa(addr.sin_addr));
+dbgprintf("hostname: %s\n", clientip);
+	/* zurzeitiger segfault because prop.CreateStringProp is a NULL Pointer */
+	prop.CreateStringProp(&pNew->remoteIP, clientip, strlen(clientip));
+dbgprintf("remoteIP: after create string prop: %p\n", pNew->remoteIP);
+
+dbgprintf("openssl: reached post_connection_check()\n");
 	if((err = post_connection_check(pNew->ssl)) != X509_V_OK) {
 		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error checking SSL object after connection, peer"
 				" certificate: %s", X509_verify_cert_error_string(err));
@@ -544,7 +708,6 @@ AcceptConnReq(nsd_t *pNsd, nsd_t **ppNew)
 	}
 
 	/*TODO: pascal: retry when handshake is not done emediatly because it is non-blocking */
-
 	pNew->iMode = 1;
 
 	*ppNew = (nsd_t*) pNew;
@@ -565,7 +728,7 @@ finalize_it:
  * for client sockets, which are set to block during send, but should not
  * block when trying to read data.
  * The function now follows the usual iRet calling sequence.
- * With GnuTLS, we may need to restart a recv() system call. If so, we need
+ * With OpenSSL, we may need to restart a recv() system call. If so, we need
  * to supply the SAME buffer on the retry. We can not assure this, as the
  * caller is free to call us with any buffer location (and in current
  * implementation, it is on the stack and extremely likely to change). To
@@ -584,6 +747,7 @@ static rsRetVal
 Rcv(nsd_t *pNsd, uchar *pBuf, ssize_t *pLenBuf, int *const oserr)
 {
 	DEFiRet;
+	DBGPRINTF("openssl: entering Rcv\n");
 	/*TODO: pascal: rcv data*/
 	ssize_t iBytesCopy;
 	nsd_ossl_t *pThis = (nsd_ossl_t*) pNsd;
@@ -650,6 +814,7 @@ static rsRetVal
 Send(nsd_t *pNsd, uchar *pBuf, ssize_t *pLenBuf)
 {
 	DEFiRet;
+	DBGPRINTF("openssl: entering Send\n");
 	int iSent;
 	int err;
 	nsd_ossl_t *pThis = (nsd_ossl_t*) pNsd;
@@ -696,7 +861,7 @@ finalize_it:
 	RETiRet;
 }
 
-/* open a connection to a remote host (server). With GnuTLS, we always
+/* open a connection to a remote host (server). With OpenSSL, we always
  * open a plain tcp socket and then, if in TLS mode, do a handshake on it.
  */
 /*pascal*/
@@ -706,6 +871,7 @@ static rsRetVal
 Connect(nsd_t *pNsd, int family, uchar *port, uchar *host, char *device)
 {
 	DEFiRet;
+	DBGPRINTF("openssl: entering Connect\n");
 	nsd_ossl_t*pThis = (nsd_ossl_t*) pNsd;
 	BIO *conn;
 	SSL * ssl;
@@ -739,6 +905,7 @@ Connect(nsd_t *pNsd, int family, uchar *port, uchar *host, char *device)
 		FINALIZE;
 	}
 
+	DBGPRINTF("We are in tls mode\n");
 	/*if we reach this point we are in tls mode */
 	if(!(ssl = SSL_new(ctx))) {
 		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error creating an SSL context");
@@ -819,6 +986,7 @@ CODESTARTObjClassExit(nsd_ossl)
 	objRelease(errmsg, CORE_COMPONENT);
 	objRelease(netstrm, DONT_LOAD_LIB);
 	objRelease(netstrms, LM_NETSTRMS_FILENAME);
+	objRelease(prop, CORE_COMPONENT);
 ENDObjClassExit(nsd_ossl)
 
 /* Initialize the nsd_ossl class. Must be called as the very first method
@@ -832,6 +1000,7 @@ BEGINObjClassInit(nsd_ossl, 1, OBJ_IS_LOADABLE_MODULE) /* class, version */
 	CHKiRet(objUse(net, LM_NET_FILENAME));
 	CHKiRet(objUse(netstrms, LM_NETSTRMS_FILENAME));
 	CHKiRet(objUse(netstrm, DONT_LOAD_LIB));
+	CHKiRet(objUse(prop, CORE_COMPONENT));
 
 	/* now do global TLS init stuff */
 	CHKiRet(osslGlblInit());
