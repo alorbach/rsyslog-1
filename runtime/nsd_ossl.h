@@ -8,11 +8,11 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *       http://www.apache.org/licenses/LICENSE-2.0
  *       -or-
  *       see COPYING.ASL20 in the source distribution
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -40,8 +40,9 @@ struct nsd_ossl_s {
 	BEGINobjInstance;	/* Data to implement generic object - MUST be the first data element! */
 	uchar *pRemHostName;	/* host name of remote peer */
 	prop_t *remoteIP;	/* IP address of remote peer */
+	struct sockaddr_storage remAddr; /**< remote addr as sockaddr - used for legacy ACL code */
 	int iMode;		/* 0 - plain tcp, 1 - TLS */
-	enum { 
+	enum {
 		OSSL_AUTH_CERTNAME = 0,
 		OSSL_AUTH_CERTFINGERPRINT = 1,
 		OSSL_AUTH_CERTVALID = 2,

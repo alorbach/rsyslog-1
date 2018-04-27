@@ -1,7 +1,7 @@
 /* nsd_ossl.c
  *
  * An implementation of the nsd interface for OpenSSL.
- * 
+ *
  * Copyright (C) 2017 Adiscon GmbH.
  * Author: Pascal Withopf
  *
@@ -52,6 +52,7 @@
 #include "datetime.h"
 #include "nsd_ptcp.h"
 #include "prop.h"
+#include "dnscache.h"
 #include "nsdsel_ossl.h"
 #include "nsd_ossl.h"
 #include "unicode-helper.h"
@@ -107,58 +108,58 @@ long BIO_debug_callback(BIO *bio, int cmd, const char *argp,
     if (BIO_CB_RETURN & cmd)
         r = ret;
 
-    dbgprintf("openssl debug: BIO[%p]: ", (void *)bio);
+    dbgprintf("openssl: debugmsg: BIO[%p]: ", (void *)bio);
 
     switch (cmd) {
     case BIO_CB_FREE:
-        dbgprintf("openssl debug: Free - %s\n", bio->method->name);
+        dbgprintf("Free - %s\n", bio->method->name);
         break;
     case BIO_CB_READ:
         if (bio->method->type & BIO_TYPE_DESCRIPTOR)
-            dbgprintf("openssl debug: read(%d,%lu) - %s fd=%d\n",
+            dbgprintf("read(%d,%lu) - %s fd=%d\n",
                          bio->num, (unsigned long)argi,
                          bio->method->name, bio->num);
         else
-            dbgprintf("openssl debug: read(%d,%lu) - %s\n",
+            dbgprintf("read(%d,%lu) - %s\n",
                          bio->num, (unsigned long)argi, bio->method->name);
         break;
     case BIO_CB_WRITE:
         if (bio->method->type & BIO_TYPE_DESCRIPTOR)
-            dbgprintf("openssl debug: write(%d,%lu) - %s fd=%d\n",
+            dbgprintf("write(%d,%lu) - %s fd=%d\n",
                          bio->num, (unsigned long)argi,
                          bio->method->name, bio->num);
         else
-            dbgprintf("openssl debug: write(%d,%lu) - %s\n",
+            dbgprintf("write(%d,%lu) - %s\n",
                          bio->num, (unsigned long)argi, bio->method->name);
         break;
     case BIO_CB_PUTS:
-        dbgprintf("openssl debug: puts() - %s\n", bio->method->name);
+        dbgprintf("puts() - %s\n", bio->method->name);
         break;
     case BIO_CB_GETS:
-        dbgprintf("openssl debug: gets(%lu) - %s\n", (unsigned long)argi,
+        dbgprintf("gets(%lu) - %s\n", (unsigned long)argi,
                      bio->method->name);
         break;
     case BIO_CB_CTRL:
-        dbgprintf("openssl debug: ctrl(%lu) - %s\n", (unsigned long)argi,
+        dbgprintf("ctrl(%lu) - %s\n", (unsigned long)argi,
                      bio->method->name);
         break;
     case BIO_CB_RETURN | BIO_CB_READ:
-        dbgprintf("openssl debug: read return %ld\n", ret);
+        dbgprintf("read return %ld\n", ret);
         break;
     case BIO_CB_RETURN | BIO_CB_WRITE:
-        dbgprintf("openssl debug: write return %ld\n", ret);
+        dbgprintf("write return %ld\n", ret);
         break;
     case BIO_CB_RETURN | BIO_CB_GETS:
-        dbgprintf("openssl debug: gets return %ld\n", ret);
+        dbgprintf("gets return %ld\n", ret);
         break;
     case BIO_CB_RETURN | BIO_CB_PUTS:
-        dbgprintf("openssl debug: puts return %ld\n", ret);
+        dbgprintf("puts return %ld\n", ret);
         break;
     case BIO_CB_RETURN | BIO_CB_CTRL:
-        dbgprintf("openssl debug: ctrl return %ld\n", ret);
+        dbgprintf("ctrl return %ld\n", ret);
         break;
     default:
-        dbgprintf("openssl debug: bio callback - unknown type (%d)\n", cmd);
+        dbgprintf("bio callback - unknown type (%d)\n", cmd);
         break;
     }
 
@@ -167,7 +168,7 @@ long BIO_debug_callback(BIO *bio, int cmd, const char *argp,
 
 
 /* globally initialize OpenSSL
- * 
+ *
  */
 static rsRetVal
 osslGlblInit(void)
@@ -216,10 +217,14 @@ osslGlblInit(void)
 				"Is the file at the right path? And do we have the permissions?");
 		ABORT_FINALIZE(RS_RET_NO_ERRCODE);
 	}
+
+// --- TODO: HANDLE based on TLS MODE!
+
 	/* pascal: wird bei gnutls in methode gnutlsInitSession gemacht!!!*/
 	SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER|SSL_VERIFY_FAIL_IF_NO_PEER_CERT, verify_callback);
 	/*TODO: pascal: Wie tief sollen Ketten geprüft werden? Zur Zeit 4 */
 	SSL_CTX_set_verify_depth(ctx, 4);
+// ---
 
 	// TODO: Set timeout to a higher value
 	SSL_CTX_set_timeout(ctx, 5);
@@ -243,7 +248,7 @@ osslInitSession(nsd_ossl_t *pThis)
 		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error creating SSL context");
 	}
 	client = BIO_pop(pThis->acc);
-	
+
 dbgprintf("osslInitSession: BIO[%p] \n", (void *)client);
 
 	SSL_set_bio(pThis->ssl, client, client);
@@ -448,7 +453,7 @@ finalize_it:
 	RETiRet;
 }
 
-/* Set permitted peers. It is depending on the auth mode if this are 
+/* Set permitted peers. It is depending on the auth mode if this are
  * fingerprints or names. -- rgerhards, 2008-05-19
  */
 static rsRetVal
@@ -539,7 +544,7 @@ LstnInit(netstrms_t *pNS, void *pUsr, rsRetVal(*fAddLstn)(void*,netstrm_t*),
 	 uchar *pLstnPort, uchar *pLstnIP, int iSessMax)
 {
 	DEFiRet;
-	DBGPRINTF("openssl: entering LstnInit\n");
+	DBGPRINTF("LstnInit: entering LstnInit\n");
 	nsd_t *pNewNsd = NULL;
 	netstrm_t *pNewStrm = NULL;
 	BIO *acc;
@@ -549,27 +554,29 @@ LstnInit(netstrms_t *pNS, void *pUsr, rsRetVal(*fAddLstn)(void*,netstrm_t*),
 		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error creating server socket");
 		ABORT_FINALIZE(RS_RET_NO_ERRCODE);
 	}
-	DBGPRINTF("openssl: Server socket created\n");
+	DBGPRINTF("LstnInit: Server socket created\n");
 	if(BIO_do_accept(acc) <= 0) {
 		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error binding server socket");
 		ABORT_FINALIZE(RS_RET_NO_ERRCODE);
 	}
-	DBGPRINTF("openssl: Server socket bound\n");
+	DBGPRINTF("LstnInit: Server socket bound\n");
 
 	BIO_set_callback(acc, BIO_debug_callback);
 
 	CHKiRet(nsd_osslConstruct(&pNewNsd));
-dbgprintf("after construct");
+	dbgprintf("LstnInit: after construct\n");
+
 	CHKiRet(SetSock(pNewNsd, acc));
 	CHKiRet(SetMode(pNewNsd, netstrms.GetDrvrMode(pNS)));
 	CHKiRet(SetAuthMode(pNewNsd, netstrms.GetDrvrAuthMode(pNS)));
 	CHKiRet(SetPermPeers(pNewNsd, netstrms.GetDrvrPermPeers(pNS)));
 	CHKiRet(netstrms.CreateStrm(pNS, &pNewStrm));
 	pNewStrm->pDrvrData = (nsd_t*) pNewNsd;
-	pNewNsd = NULL;
+
 	CHKiRet(fAddLstn(pUsr, pNewStrm));
-	pNewStrm = NULL;
-	acc = NULL;
+//	pNewNsd = NULL;
+//	pNewStrm = NULL;
+//	acc = NULL;
 
 finalize_it:
 	if(iRet != RS_RET_OK) {
@@ -586,7 +593,7 @@ finalize_it:
 static rsRetVal
 CheckConnection(nsd_t __attribute__((unused)) *pNsd)
 {
-
+// TODO
 }
 
 /* get the remote hostname. The returned hostname must be freed by the caller.
@@ -598,9 +605,9 @@ GetRemoteHName(nsd_t *pNsd, uchar **ppszHName)
 	nsd_ossl_t *pThis = (nsd_ossl_t*) pNsd;
 	ISOBJ_TYPE_assert(pThis, nsd_ossl);
 	assert(ppszHName != NULL);
-	//TODO: how can the RemHost be empty?
-
+//TODO: how can the RemHost be empty?
 	CHKmalloc(*ppszHName = (uchar*)strdup(pThis->pRemHostName == NULL ? "" : (char*) pThis->pRemHostName));
+	DBGPRINTF("GetRemoteHName: %s \n", pThis->pRemHostName);
 finalize_it:
 	RETiRet;
 }
@@ -612,7 +619,14 @@ finalize_it:
 static rsRetVal
 GetRemAddr(nsd_t *pNsd, struct sockaddr_storage **ppAddr)
 {
+	nsd_ptcp_t *pThis = (nsd_ossl_t*) pNsd;
 	DEFiRet;
+
+	ISOBJ_TYPE_assert((pThis), nsd_ossl);
+	assert(ppAddr != NULL);
+
+	*ppAddr = &(pThis->remAddr);
+
 	RETiRet;
 }
 
@@ -634,7 +648,31 @@ rsRetVal
 post_connection_check(SSL *ssl)
 {
 	DEFiRet;
-	/*TODO: pascal: check certificate from peer */
+/*TODO: pascal: check certificate from peer */
+	RETiRet;
+}
+
+static rsRetVal
+FillRemHost(nsd_ossl_t *pThis, struct sockaddr_storage *pAddr)
+{
+	prop_t *fqdn;
+
+	DEFiRet;
+	ISOBJ_TYPE_assert(pThis, nsd_ossl);
+	assert(pAddr != NULL);
+
+	CHKiRet(dnscacheLookup(pAddr, &fqdn, NULL, NULL, &pThis->remoteIP));
+
+	/* We now have the names, so now let's allocate memory and store them permanently.
+	 * (side note: we may hold on to these values for quite a while, thus we trim their
+	 * memory consumption)
+	 */
+	if((pThis->pRemHostName = MALLOC(prop.GetStringLen(fqdn)+1)) == NULL)
+		ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
+	memcpy(pThis->pRemHostName, propGetSzStr(fqdn), prop.GetStringLen(fqdn)+1);
+	prop.Destruct(&fqdn);
+
+finalize_it:
 	RETiRet;
 }
 
@@ -661,12 +699,12 @@ AcceptConnReq(nsd_t *pNsd, nsd_t **ppNew)
 	ISOBJ_TYPE_assert((pThis), nsd_ossl);
 	CHKiRet(nsd_osslConstruct(&pNew));
 	BIO_free(pNew->acc);
-dbgprintf("AcceptConnReq: BIO[%p]\n", (void *)pThis->acc);	
+dbgprintf("openssl: AcceptConnReq: BIO[%p]\n", (void *)pThis->acc);
 	if(BIO_do_accept(pThis->acc) <= 0) {
 		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error accepting connection");
 		ABORT_FINALIZE(RS_RET_NO_ERRCODE);
 	}
-	
+
 	if(pThis->iMode == 0) {
 		/*we are in non-TLS mode, so we are done */
 		DBGPRINTF("openssl: we are NOT in TLS mode\n");
@@ -683,22 +721,26 @@ dbgprintf("AcceptConnReq: BIO[%p]\n", (void *)pThis->acc);
 
 	DBGPRINTF("openssl: starting handshake\n");
 	/*we now do the handshake */
-dbgprintf("SSL_accept: pNew->ssl[%p]\n", (void *)pNew->ssl);
+dbgprintf("openssl: SSL_accept: pNew->ssl[%p]\n", (void *)pNew->ssl);
 	if((ret = SSL_accept(pNew->ssl)) <= 0) {
 		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error accepting SSL connection");
 		getLastSSLErrorMsg(ret, pNew->ssl, "AcceptConnReq");
 	}
-dbgprintf("SSL_accept: after function\n");
+dbgprintf("openssl: SSL_accept: after function\n");
 
-dbgprintf("openssl debug: socket client %p\n", SSL_get_fd(pNew->ssl));
+dbgprintf("openssl: socket client fd=%d\n", SSL_get_fd(pNew->ssl));
 	iSocked = SSL_get_fd(pNew->ssl);
-	addr_size = sizeof(struct sockaddr_in); 
-	res = getpeername(iSocked, (struct sockaddr *)&addr, &addr_size); 
+	addr_size = sizeof(struct sockaddr_in);
+	res = getpeername(iSocked, (struct sockaddr *)&addr, &addr_size);
 	strcpy(clientip, inet_ntoa(addr.sin_addr));
-dbgprintf("hostname: %s\n", clientip);
+dbgprintf("openssl: hostname: %s\n", clientip);
 	/* zurzeitiger segfault because prop.CreateStringProp is a NULL Pointer */
 	prop.CreateStringProp(&pNew->remoteIP, clientip, strlen(clientip));
-dbgprintf("remoteIP: after create string prop: %p\n", pNew->remoteIP);
+dbgprintf("openssl: remoteIP: after create string prop: %p\n", pNew->remoteIP);
+
+	/* fill remotehost from ip addr */
+	memcpy(&pNew->remAddr, &addr, sizeof(struct sockaddr_storage));
+	CHKiRet(FillRemHost(pNew, &addr));
 
 dbgprintf("openssl: reached post_connection_check()\n");
 	if((err = post_connection_check(pNew->ssl)) != X509_V_OK) {
@@ -734,7 +776,7 @@ finalize_it:
  * implementation, it is on the stack and extremely likely to change). To
  * work-around this problem, we allocate a buffer ourselfs and always receive
  * into that buffer. We pass data on to the caller only after we have received it.
- * To save some space, we allocate that internal buffer only when it is actually 
+ * To save some space, we allocate that internal buffer only when it is actually
  * needed, which means when we reach this function for the first time. To keep
  * the algorithm simple, we always supply data only from the internal buffer,
  * even if it is a single byte. As we have a stream, the caller must be prepared
@@ -759,7 +801,7 @@ Rcv(nsd_t *pNsd, uchar *pBuf, ssize_t *pLenBuf, int *const oserr)
 
 	/* --- in TLS mode now --- */
 
-	/* Buffer logic applies only if we are in TLS mode. Here we 
+	/* Buffer logic applies only if we are in TLS mode. Here we
 	 * assume that we will switch from plain to TLS, but never back. This
 	 * assumption may be unsafe, but it is the model for the time being and I
 	 * do not see any valid reason why we should switch back to plain TCP after

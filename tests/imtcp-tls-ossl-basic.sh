@@ -1,5 +1,5 @@
 #!/bin/bash
-# added 2011-02-28 by Rgerhards
+# added 2018-04-27 by alorbach
 # This file is part of the rsyslog project, released  under GPLv3
 . $srcdir/diag.sh init
 . $srcdir/diag.sh generate-conf
@@ -10,7 +10,7 @@ global(	defaultNetstreamDriverCAFile="'$srcdir/tls-certs/ca.pem'"
 )
 
 module(	load="../plugins/imtcp/.libs/imtcp"
-	StreamDriver.Name="gtls"
+	StreamDriver.Name="ossl"
 	StreamDriver.Mode="1"
 	StreamDriver.AuthMode="anon" )
 input(	type="imtcp"
@@ -22,11 +22,10 @@ template(name="outfmt" type="string" string="%msg:F,58:2%\n")
 					file="rsyslog.out.log")
 '
 # Begin actuall testcase
-. $srcdir/diag.sh startup-vg-noleak
-./msleep 5000
+. $srcdir/diag.sh startup
+#./msleep 2000
 . $srcdir/diag.sh tcpflood -p13514 -m10000 -Ttls -Z$srcdir/tls-certs/cert.pem -z$srcdir/tls-certs/key.pem
 . $srcdir/diag.sh shutdown-when-empty # shut down rsyslogd when done processing messages
-. $srcdir/diag.sh wait-shutdown-vg
-. $srcdir/diag.sh check-exit-vg
+. $srcdir/diag.sh wait-shutdown
 . $srcdir/diag.sh seq-check 0 9999
 . $srcdir/diag.sh exit

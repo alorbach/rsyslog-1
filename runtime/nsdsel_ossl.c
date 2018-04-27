@@ -1,7 +1,7 @@
 /* nsdsel_ossl.c
  *
  * An implementation of the nsd select() interface for GnuTLS.
- * 
+ *
  * Copyright (C) 2017 Adiscon GmbH.
  * Author: Pascal Withopf
  *
@@ -10,11 +10,11 @@
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *       http://www.apache.org/licenses/LICENSE-2.0
  *       -or-
  *       see COPYING.ASL20 in the source distribution
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -47,11 +47,12 @@ DEFobjCurrIf(glbl)
 static rsRetVal
 osslHasRcvInBuffer(nsd_ossl_t *pThis)
 {
-	/* we have a valid receive buffer one such is allocated and 
+	/* we have a valid receive buffer one such is allocated and
 	 * NOT exhausted!
 	 */
-	DBGPRINTF("hasRcvInBuffer on nsd %p: pszRcvBuf %p, lenRcvBuf %d\n", pThis,
+	DBGPRINTF("nsdsel_ossl: hasRcvInBuffer on NSD[%p]: pszRcvBuf %p, lenRcvBuf %d\n", pThis,
 		pThis->pszRcvBuf, pThis->lenRcvBuf);
+
 	return(pThis->pszRcvBuf != NULL && pThis->lenRcvBuf != -1);
 }
 
@@ -75,6 +76,8 @@ Add(nsdsel_t *pNsdsel, nsd_t *pNsd, nsdsel_waitOp_t waitOp)
 
 	ISOBJ_TYPE_assert(pThis, nsdsel_ossl);
 	ISOBJ_TYPE_assert(pNsdOSSL, nsd_ossl);
+//	DBGPRINTF("nsdsel_ossl: Add for NSD[%p] \n", (void *)pNsdOSSL);
+
 	if(pNsdOSSL->iMode == 1) {
 		if(waitOp == NSDSEL_RD && osslHasRcvInBuffer(pNsdOSSL)) {
 			++pThis->iBufferRcvReady;
@@ -84,24 +87,26 @@ Add(nsdsel_t *pNsdsel, nsd_t *pNsd, nsdsel_waitOp_t waitOp)
 			FINALIZE;
 		}
 		if(pNsdOSSL->rtryCall != osslRtry_None) {
-/*			if(gnutls_record_get_direction(pNsdGTLS->sess) == 0) {
-				CHKiRet(nsdsel_ptcp.Add(pThis->pTcp, pNsdGTLS->pTcp, NSDSEL_RD));
+DBGPRINTF("nsdsel_ossl: rtryCall != osslRtry_None\n");
+/*			if(gnutls_record_get_direction(pNsdOSSL->sess) == 0) {
+				CHKiRet(nsdsel_ptcp.Add(pThis->pTcp, pNsdOSSL->pTcp, NSDSEL_RD));
 			} else {
-				CHKiRet(nsdsel_ptcp.Add(pThis->pTcp, pNsdGTLS->pTcp, NSDSEL_WR));
+				CHKiRet(nsdsel_ptcp.Add(pThis->pTcp, pNsdOSSL->pTcp, NSDSEL_WR));
 			}
 			FINALIZE; */
 		}
 	}
+// *((char*)0)= 0;
 
 	/* if we reach this point, we need no special handling */
-/*	CHKiRet(nsdsel_ptcp.Add(pThis->pTcp, pNsdGTLS->pTcp, waitOp)); */
+	// WHAT TO DO INSTEAD ? CHKiRet(nsdsel_ptcp.Add(pThis->pTcp, pNsdOSSL->pTcp, waitOp)); */
 
 finalize_it:
 	RETiRet;
 }
 
 
-/* perform the select()  piNumReady returns how many descriptors are ready for IO 
+/* perform the select()  piNumReady returns how many descriptors are ready for IO
  * TODO: add timeout!
  */
 static rsRetVal
@@ -116,7 +121,31 @@ static rsRetVal
 IsReady(nsdsel_t *pNsdsel, nsd_t *pNsd, nsdsel_waitOp_t waitOp, int *pbIsReady)
 {
 	DEFiRet;
-	
+	nsdsel_ossl_t *pThis = (nsdsel_ossl_t*) pNsdsel;
+	nsd_ossl_t *pNsdOSSL = (nsd_ossl_t*) pNsd;
+
+	/* default rdy state */
+	*pbIsReady = 0;
+
+//	DBGPRINTF("nsdsel_ossl: IsReady for NSD[%p] \n", (void *)pNsdOSSL);
+
+	if(pNsdOSSL->iMode == 1) {
+
+		if(BIO_do_accept(pNsdOSSL->acc) <= 0) {
+			dbgprintf("nsdsel_ossl: IsReady BIO_do_accept has no waiting SOCJET!\n");
+			FINALIZE;
+		} else {
+			dbgprintf("nsdsel_ossl: IsReady BIO_do_accept has waiting SOCKET!\n");
+			*pbIsReady = 1;
+			FINALIZE;
+		}
+	}
+
+/* Use PTCP default callback */
+// TODO !
+//	CHKiRet(nsdsel_ptcp.IsReady(pThis->pTcp, pNsdOSSL->pTcp, waitOp, pbIsReady));
+
+finalize_it:
 	RETiRet;
 }
 
