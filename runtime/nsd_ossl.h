@@ -51,10 +51,13 @@ struct nsd_ossl_s {
 	permittedPeers_t *pPermPeers;
 	osslRtryCall_t rtryCall;
 	BIO *acc;		/* Address is bound to Bio */
+	int bioAccepted;	/* Helper to store if bio was accepted */
 	SSL *ssl;		/* SSL connection */
+	int sock;		/* Actual Socket handle! */
 	int bHaveSess;
 	char *pszRcvBuf;
-	int lenRcvBuf;		/**< -1: empty, 0: connection closed, 1..NSD_GTLS_MAX_RCVBUF-1: data of that size present */
+	int lenRcvBuf;		/**< -1: empty, 0: connection closed, 1..NSD_GTLS_MAX_RCVBUF-1:
+					data of that size present */
 	int ptrRcvBuf;		/**< offset for next recv operation if 0 < lenRcvBuf < NSD_GTLS_MAX_RCVBUF */
 };
 

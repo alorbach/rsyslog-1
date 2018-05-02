@@ -80,6 +80,38 @@ static int bGlblSrvrInitDone = 0;	/**< 0 - server global init not yet done, 1 - 
 /*--------------------------------------OpenSSL specifics------------------------------------------*/
 static SSL_CTX *ctx;
 
+void
+getLastSSLErrorMsg(int ret, SSL *ssl, char* pszCallSource)
+{
+	unsigned long un_error = 0;
+	char psz[256];
+	int iMyRet = SSL_get_error(ssl, ret);
+
+	/* Check which kind of error we have */
+	DBGPRINTF("Error in Method: %s\n", pszCallSource);
+	if(iMyRet == SSL_ERROR_SSL) {
+		un_error = ERR_peek_last_error();
+		ERR_error_string_n(un_error, psz, 256);
+		errmsg.LogError(0, RS_RET_NO_ERRCODE, "%s", psz);
+	} else if(iMyRet == SSL_ERROR_SYSCALL){
+		iMyRet = ERR_get_error();
+		if(ret == 0) {
+			iMyRet = SSL_get_error(ssl, iMyRet);
+			if(iMyRet == 0) {
+				*psz = '\0';
+			} else {
+				ERR_error_string_n(iMyRet, psz, 256);
+			}
+		} else {
+			un_error = ERR_peek_last_error();
+			ERR_error_string_n(un_error, psz, 256);
+		}
+		errmsg.LogError(0, RS_RET_NO_ERRCODE, "%s", psz);
+	} else {
+		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Unknown SSL Error, SSL_get_error: %d", iMyRet);
+	}
+}
+
 int verify_callback(int status, X509_STORE_CTX *store)
 {
 	char data[256];
@@ -100,15 +132,15 @@ int verify_callback(int status, X509_STORE_CTX *store)
 	return status;
 }
 
-long BIO_debug_callback(BIO *bio, int cmd, const char *argp,
-                        int argi, long argl, long ret)
+long BIO_debug_callback(BIO *bio, int cmd, const char __attribute__((unused)) *argp,
+                        int argi, long __attribute__((unused)) argl, long ret)
 {
     long r = 1;
 
     if (BIO_CB_RETURN & cmd)
         r = ret;
 
-    dbgprintf("openssl: debugmsg: BIO[%p]: ", (void *)bio);
+    dbgprintf("openssl debugmsg: BIO[%p]: ", (void *)bio);
 
     switch (cmd) {
     case BIO_CB_FREE:
@@ -183,18 +215,18 @@ osslGlblInit(void)
 	}
 	SSL_load_error_strings();
 
-	caFile = glbl.GetDfltNetstrmDrvrCAF();
+	caFile = (const char *) glbl.GetDfltNetstrmDrvrCAF();
 	if(caFile == NULL) {
 		errmsg.LogError(0, RS_RET_CA_CERT_MISSING, "Error: CA certificate is not set, cannot continue");
 		ABORT_FINALIZE(RS_RET_CA_CERT_MISSING);
 	}
-	certFile = glbl.GetDfltNetstrmDrvrCertFile();
+	certFile = (const char *) glbl.GetDfltNetstrmDrvrCertFile();
 	if(certFile == NULL) {
 		errmsg.LogError(0, RS_RET_CERT_MISSING, "Error: Certificate file is not set, cannot continue");
 		ABORT_FINALIZE(RS_RET_CERT_MISSING);
 
 	}
-	keyFile = glbl.GetDfltNetstrmDrvrKeyFile();
+	keyFile = (const char *) glbl.GetDfltNetstrmDrvrKeyFile();
 	if(keyFile == NULL) {
 		errmsg.LogError(0, RS_RET_CERTKEY_MISSING, "Error: Key file is not set, cannot continue");
 		ABORT_FINALIZE(RS_RET_CERTKEY_MISSING);
@@ -218,6 +250,11 @@ osslGlblInit(void)
 		ABORT_FINALIZE(RS_RET_NO_ERRCODE);
 	}
 
+	/* Set CTX Options */
+	SSL_CTX_set_cipher_list(ctx,"ALL");  /* Support all ciphers */
+
+
+
 // --- TODO: HANDLE based on TLS MODE!
 
 	/* pascal: wird bei gnutls in methode gnutlsInitSession gemacht!!!*/
@@ -238,22 +275,24 @@ finalize_it:
 }
 
 static rsRetVal
-osslInitSession(nsd_ossl_t *pThis)
+osslInitSession(nsd_ossl_t *pThis, nsd_ossl_t *pServer)
 {
 	DEFiRet;
-	DBGPRINTF("openssl: entering osslInitSession\n");
 	BIO *client;
 
 	if(!(pThis->ssl = SSL_new(ctx))) {
-		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error creating SSL context");
+		getLastSSLErrorMsg(0, pThis->ssl, "Error while creating SSL context in osslInitSession");
 	}
-	client = BIO_pop(pThis->acc);
+	client = BIO_pop(pServer->acc);
 
-dbgprintf("osslInitSession: BIO[%p] \n", (void *)client);
+	dbgprintf("osslInitSession: Init client BIO[%p] done\n", (void *)client);
 
 	SSL_set_bio(pThis->ssl, client, client);
+	SSL_set_accept_state(pThis->ssl);
+
 	pThis->bHaveSess = 1;
 
+// finalize_it:
 	RETiRet;
 }
 
@@ -261,23 +300,27 @@ rsRetVal
 osslRecordRecv(nsd_ossl_t *pThis)
 {
 	DEFiRet;
-	DBGPRINTF("openssl: entering osslRecordRecv");
+	DBGPRINTF("osslRecordRecv: start\n");
 	ssize_t lenRcvd;
 	int err;
 
 	ISOBJ_TYPE_assert(pThis, nsd_ossl);
-	lenRcvd =  SSL_read(pThis->ssl, pThis->pszRcvBuf, NSD_OSSL_MAX_RCVBUF);
+	lenRcvd = SSL_read(pThis->ssl, pThis->pszRcvBuf, NSD_OSSL_MAX_RCVBUF);
 	if(lenRcvd > 0) {
 		pThis->lenRcvBuf = lenRcvd;
 		pThis->ptrRcvBuf = 0;
 	} else {
 		err = SSL_get_error(pThis->ssl, lenRcvd);
-		if(err != SSL_ERROR_ZERO_RETURN && err != SSL_ERROR_WANT_READ &&
+		if(	err != SSL_ERROR_ZERO_RETURN &&
+			err != SSL_ERROR_WANT_READ &&
 			err != SSL_ERROR_WANT_WRITE) {
+				getLastSSLErrorMsg(lenRcvd, pThis->ssl, "osslRecordRecv");
+/*
 				errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error while reading data: "
 						"[%d] %s", err, ERR_error_string(err, NULL));
 				errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error is: %s",
 						ERR_reason_error_string(err));
+*/
 				ABORT_FINALIZE(RS_RET_NO_ERRCODE);
 		} else {
 			pThis->rtryCall =  osslRtry_recv;
@@ -332,39 +375,6 @@ osslEndSess(nsd_ossl_t *pThis)
 
 	RETiRet;
 }
-
-char *
-getLastSSLErrorMsg(int ret, SSL *ssl, char* pszCallSource)
-{
-	unsigned long un_error = 0;
-	char psz[256];
-	int iMyRet = SSL_get_error(ssl, ret);
-
-	/* Check which kind of error we have */
-	DBGPRINTF("Error in Method: %s\n", pszCallSource);
-	if(iMyRet == SSL_ERROR_SSL) {
-		un_error = ERR_peek_last_error();
-		ERR_error_string_n(un_error, psz, 256);
-		errmsg.LogError(0, RS_RET_NO_ERRCODE, "%s", psz);
-	} else if(iMyRet == SSL_ERROR_SYSCALL){
-		iMyRet = ERR_get_error();
-		if(ret == 0) {
-			iMyRet = SSL_get_error(ssl, iMyRet);
-			if(iMyRet = 0) {
-				*psz = '\0';
-			} else {
-				ERR_error_string_n(iMyRet, psz, 256);
-			}
-		} else {
-			un_error = ERR_peek_last_error();
-			ERR_error_string_n(un_error, psz, 256);
-		}
-		errmsg.LogError(0, RS_RET_NO_ERRCODE, "%s", psz);
-	} else {
-		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Unknown SSL Error, SSL_get_error: %d", iMyRet);
-	}
-}
-
 /*--------------------------------End OpenSSL specifics----------------------------------------------*/
 
 /* Standard-Constructor */
@@ -478,18 +488,36 @@ finalize_it:
 }
 
 /* Provide access to the underlying OS socket. This is primarily
+ * useful for other drivers (like nsd_gtls) who utilize ourselfs
+ * for some of their functionality. -- rgerhards, 2008-04-18
+ */
+static rsRetVal
+SetSock(nsd_t *pNsd, int sock)
+{
+	DEFiRet;
+	nsd_ossl_t *pThis = (nsd_ossl_t*) pNsd;
+	ISOBJ_TYPE_assert((pThis), nsd_ossl);
+	assert(sock >= 0);
+
+	DBGPRINTF("SetSock: Setting sock %d\n", sock);
+	pThis->sock = sock;
+
+	RETiRet;
+}
+
+/* Provide access to the underlying OS socket. This is primarily
  * useful for other drivers (like nsd_ossl) who utilize ourselfs
  * for some of their functionality.
  */
 static rsRetVal
-SetSock(nsd_t *pNsd, BIO *acc)
+SetBio(nsd_t *pNsd, BIO *acc)
 {
 	DEFiRet;
 	nsd_ossl_t *pThis = (nsd_ossl_t*) pNsd;
-
 	ISOBJ_TYPE_assert((pThis), nsd_ossl);
 	assert(acc != NULL);
 
+	DBGPRINTF("SetBio: Setting BIO %p\n", acc);
 	pThis->acc = acc;
 
 	RETiRet;
@@ -501,6 +529,10 @@ static rsRetVal
 SetKeepAliveIntvl(nsd_t *pNsd, int keepAliveIntvl)
 {
 	DEFiRet;
+	nsd_ossl_t *pThis = (nsd_ossl_t*) pNsd;
+	ISOBJ_TYPE_assert((pThis), nsd_ossl);
+	dbgprintf("SetKeepAliveIntvl: keepAliveIntvl=%d\n", keepAliveIntvl);
+
 	RETiRet;
 }
 
@@ -511,6 +543,10 @@ static rsRetVal
 SetKeepAliveProbes(nsd_t *pNsd, int keepAliveProbes)
 {
 	DEFiRet;
+	nsd_ossl_t *pThis = (nsd_ossl_t*) pNsd;
+	ISOBJ_TYPE_assert((pThis), nsd_ossl);
+	dbgprintf("SetKeepAliveProbes: keepAliveProbes=%d\n", keepAliveProbes);
+
 	RETiRet;
 }
 
@@ -521,6 +557,10 @@ static rsRetVal
 SetKeepAliveTime(nsd_t *pNsd, int keepAliveTime)
 {
 	DEFiRet;
+	nsd_ossl_t *pThis = (nsd_ossl_t*) pNsd;
+	ISOBJ_TYPE_assert((pThis), nsd_ossl);
+	dbgprintf("SetKeepAliveTime: keepAliveTime=%d\n", keepAliveTime);
+
 	RETiRet;
 }
 
@@ -531,6 +571,9 @@ static rsRetVal
 Abort(nsd_t *pNsd)
 {
 	DEFiRet;
+	nsd_ossl_t *pThis = (nsd_ossl_t*) pNsd;
+	ISOBJ_TYPE_assert((pThis), nsd_ossl);
+
 	RETiRet;
 }
 
@@ -544,10 +587,15 @@ LstnInit(netstrms_t *pNS, void *pUsr, rsRetVal(*fAddLstn)(void*,netstrm_t*),
 	 uchar *pLstnPort, uchar *pLstnIP, int iSessMax)
 {
 	DEFiRet;
-	DBGPRINTF("LstnInit: entering LstnInit\n");
+
 	nsd_t *pNewNsd = NULL;
 	netstrm_t *pNewStrm = NULL;
 	BIO *acc;
+	assert(fAddLstn != NULL);
+	assert(pLstnPort != NULL);
+	assert(iSessMax >= 0);
+
+	dbgprintf("LstnInit: entering LstnInit for %s:%s SessMAx=%d\n", pLstnIP, pLstnPort, iSessMax);
 
 	acc = BIO_new_accept((const char*)pLstnPort);
 	if(!acc) {
@@ -559,14 +607,19 @@ LstnInit(netstrms_t *pNS, void *pUsr, rsRetVal(*fAddLstn)(void*,netstrm_t*),
 		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error binding server socket");
 		ABORT_FINALIZE(RS_RET_NO_ERRCODE);
 	}
-	DBGPRINTF("LstnInit: Server socket bound\n");
+	DBGPRINTF("LstnInit: Server socket bound (BIO_do_accept)\n");
 
 	BIO_set_callback(acc, BIO_debug_callback);
+	DBGPRINTF("LstnInit: Set BIO to NON BLocking socket (BIO_set_nbio_accept)\n");
+	BIO_set_nbio_accept(acc, 1);
 
-	CHKiRet(nsd_osslConstruct(&pNewNsd));
+	CHKiRet(nsd_osslConstruct( (nsd_ossl_t**) &pNewNsd));
 	dbgprintf("LstnInit: after construct\n");
 
-	CHKiRet(SetSock(pNewNsd, acc));
+	CHKiRet(SetBio(pNewNsd, acc));
+int sock;
+BIO_get_fd(acc, &sock);
+	CHKiRet(SetSock(pNewNsd, sock));
 	CHKiRet(SetMode(pNewNsd, netstrms.GetDrvrMode(pNS)));
 	CHKiRet(SetAuthMode(pNewNsd, netstrms.GetDrvrAuthMode(pNS)));
 	CHKiRet(SetPermPeers(pNewNsd, netstrms.GetDrvrPermPeers(pNS)));
@@ -593,7 +646,13 @@ finalize_it:
 static rsRetVal
 CheckConnection(nsd_t __attribute__((unused)) *pNsd)
 {
+	DEFiRet;
+	nsd_ossl_t *pThis = (nsd_ossl_t*) pNsd;
+	ISOBJ_TYPE_assert(pThis, nsd_ossl);
+
 // TODO
+
+	RETiRet;
 }
 
 /* get the remote hostname. The returned hostname must be freed by the caller.
@@ -608,6 +667,7 @@ GetRemoteHName(nsd_t *pNsd, uchar **ppszHName)
 //TODO: how can the RemHost be empty?
 	CHKmalloc(*ppszHName = (uchar*)strdup(pThis->pRemHostName == NULL ? "" : (char*) pThis->pRemHostName));
 	DBGPRINTF("GetRemoteHName: %s \n", pThis->pRemHostName);
+
 finalize_it:
 	RETiRet;
 }
@@ -619,7 +679,7 @@ finalize_it:
 static rsRetVal
 GetRemAddr(nsd_t *pNsd, struct sockaddr_storage **ppAddr)
 {
-	nsd_ptcp_t *pThis = (nsd_ossl_t*) pNsd;
+	nsd_ossl_t *pThis = (nsd_ossl_t*) pNsd;
 	DEFiRet;
 
 	ISOBJ_TYPE_assert((pThis), nsd_ossl);
@@ -648,7 +708,9 @@ rsRetVal
 post_connection_check(SSL *ssl)
 {
 	DEFiRet;
-/*TODO: pascal: check certificate from peer */
+	DBGPRINTF("post_connection_check: SSL=%p \n", ssl);
+
+/*TODO: IMPLEMENTE X509 cert check HERE !*/
 	RETiRet;
 }
 
@@ -684,70 +746,84 @@ static rsRetVal
 AcceptConnReq(nsd_t *pNsd, nsd_t **ppNew)
 {
 	DEFiRet;
-	DBGPRINTF("openssl: entering AcceptConnReq\n");
 	nsd_ossl_t *pNew = NULL;
 	nsd_ossl_t *pThis = (nsd_ossl_t*) pNsd;
-	BIO *client;
 	long err;
-	int ret;
-	int iSocked;
 	struct sockaddr_in addr;
 	socklen_t addr_size;
 	int res;
 	char clientip[20];
+	char szDbg[255];
+	const SSL_CIPHER* sslCipher;
 
 	ISOBJ_TYPE_assert((pThis), nsd_ossl);
 	CHKiRet(nsd_osslConstruct(&pNew));
 	BIO_free(pNew->acc);
-dbgprintf("openssl: AcceptConnReq: BIO[%p]\n", (void *)pThis->acc);
-	if(BIO_do_accept(pThis->acc) <= 0) {
-		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error accepting connection");
+	pNew->bioAccepted = FALSE;
+
+	dbgprintf("AcceptConnReq: BIO[%p] accepting connection ... \n", (void *)pThis->acc);
+	if( (res = BIO_do_accept(pThis->acc)) <= 0) {
+		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error accepting SSL connection, "
+			"BIO_do_accept failed with return %d", res);
+// 		getLastSSLErrorMsg(res, pThis->ssl, "AcceptConnReq| Error accepting connection");
 		ABORT_FINALIZE(RS_RET_NO_ERRCODE);
 	}
+// *((char*)0)= 0;
 
 	if(pThis->iMode == 0) {
 		/*we are in non-TLS mode, so we are done */
-		DBGPRINTF("openssl: we are NOT in TLS mode\n");
+		DBGPRINTF("AcceptConnReq: We are NOT in TLS mode?!\n");
 		*ppNew = (nsd_t*) pNew;
 		FINALIZE;
 	}
 
-	DBGPRINTF("openssl: we are in TLS mode\n");
-	/*if we reach this point, we are in TLS mode */
-	CHKiRet(osslInitSession(pThis)); // pNew));
-	pNew->ssl = pThis->ssl;
+	/* If we reach this point, we are in TLS mode */
+	CHKiRet(osslInitSession(pNew, pThis)); // pThis));
+	// pNew->ssl = pThis->ssl;
 	pNew->authMode = pThis->authMode;
 	pNew->pPermPeers = pThis->pPermPeers;
 
-	DBGPRINTF("openssl: starting handshake\n");
-	/*we now do the handshake */
-dbgprintf("openssl: SSL_accept: pNew->ssl[%p]\n", (void *)pNew->ssl);
-	if((ret = SSL_accept(pNew->ssl)) <= 0) {
-		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error accepting SSL connection");
-		getLastSSLErrorMsg(ret, pNew->ssl, "AcceptConnReq");
+	/* We now do the handshake */
+	dbgprintf("AcceptConnReq: Starting TLS Handshake for pNew->ssl[%p\n", (void *)pNew->ssl);
+	if((res = SSL_accept(pNew->ssl)) <= 0) {
+		getLastSSLErrorMsg(res, pNew->ssl, "AcceptConnReq|Error accepting SSL connection");
+		ABORT_FINALIZE(RS_RET_NO_ERRCODE);
 	}
-dbgprintf("openssl: SSL_accept: after function\n");
 
-dbgprintf("openssl: socket client fd=%d\n", SSL_get_fd(pNew->ssl));
-	iSocked = SSL_get_fd(pNew->ssl);
+	dbgprintf("AcceptConnReq: socket client fd=%d\n", SSL_get_fd(pNew->ssl));
+	pNew->sock = SSL_get_fd(pNew->ssl);
 	addr_size = sizeof(struct sockaddr_in);
-	res = getpeername(iSocked, (struct sockaddr *)&addr, &addr_size);
+	res = getpeername(pNew->sock, (struct sockaddr *)&addr, &addr_size);
+	if (res == -1) {
+		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error accepting SSL connection, "
+			"failed to get remote address with error %d", errno);
+		ABORT_FINALIZE(RS_RET_NO_ERRCODE);
+	}
 	strcpy(clientip, inet_ntoa(addr.sin_addr));
-dbgprintf("openssl: hostname: %s\n", clientip);
-	/* zurzeitiger segfault because prop.CreateStringProp is a NULL Pointer */
-	prop.CreateStringProp(&pNew->remoteIP, clientip, strlen(clientip));
-dbgprintf("openssl: remoteIP: after create string prop: %p\n", pNew->remoteIP);
+
+	/* Get readable hostname property!*/
+	prop.CreateStringProp(&pNew->remoteIP, (uchar*) clientip, strlen(clientip));
+	dbgprintf("AcceptConnReq: hostname=%s\n", clientip);
 
 	/* fill remotehost from ip addr */
 	memcpy(&pNew->remAddr, &addr, sizeof(struct sockaddr_storage));
-	CHKiRet(FillRemHost(pNew, &addr));
+	CHKiRet(FillRemHost(pNew, (struct sockaddr_storage*)&addr));
 
-dbgprintf("openssl: reached post_connection_check()\n");
 	if((err = post_connection_check(pNew->ssl)) != X509_V_OK) {
 		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error checking SSL object after connection, peer"
 				" certificate: %s", X509_verify_cert_error_string(err));
 		ABORT_FINALIZE(RS_RET_NO_ERRCODE);
 	}
+
+	if (SSL_get_shared_ciphers(pNew->ssl,szDbg, sizeof szDbg) != NULL)
+		dbgprintf("AcceptConnReq: Debug Shared ciphers = %s\n", szDbg);
+
+	sslCipher = (const SSL_CIPHER*) SSL_get_current_cipher(pNew->ssl);
+	if (sslCipher != NULL)
+		dbgprintf("AcceptConnReq: Debug Version: %s Name: %s\n",
+			SSL_CIPHER_get_version(sslCipher), SSL_CIPHER_get_name(sslCipher));
+
+	dbgprintf("AcceptConnReq: init done\n");
 
 	/*TODO: pascal: retry when handshake is not done emediatly because it is non-blocking */
 	pNew->iMode = 1;
@@ -789,14 +865,14 @@ static rsRetVal
 Rcv(nsd_t *pNsd, uchar *pBuf, ssize_t *pLenBuf, int *const oserr)
 {
 	DEFiRet;
-	DBGPRINTF("openssl: entering Rcv\n");
+	DBGPRINTF("Rcv: start\n");
 	/*TODO: pascal: rcv data*/
 	ssize_t iBytesCopy;
 	nsd_ossl_t *pThis = (nsd_ossl_t*) pNsd;
 	ISOBJ_TYPE_assert(pThis, nsd_ossl);
 
 	if(pThis->iMode == 0) {
-		/*TODO: pascal: rcv ohne ssl */
+/*TODO: rcv ohne ssl needed ???!!*/
 	}
 
 	/* --- in TLS mode now --- */
@@ -899,7 +975,9 @@ static rsRetVal
 EnableKeepAlive(nsd_t *pNsd)
 {
 	DEFiRet;
-finalize_it:
+	nsd_ossl_t *pThis = (nsd_ossl_t*) pNsd;
+	ISOBJ_TYPE_assert(pThis, nsd_ossl);
+
 	RETiRet;
 }
 
@@ -913,7 +991,7 @@ static rsRetVal
 Connect(nsd_t *pNsd, int family, uchar *port, uchar *host, char *device)
 {
 	DEFiRet;
-	DBGPRINTF("openssl: entering Connect\n");
+	DBGPRINTF("openssl: entering Connect family=%d, device=%s\n", family, device);
 	nsd_ossl_t*pThis = (nsd_ossl_t*) pNsd;
 	BIO *conn;
 	SSL * ssl;
@@ -924,11 +1002,11 @@ Connect(nsd_t *pNsd, int family, uchar *port, uchar *host, char *device)
 	assert(port != NULL);
 	assert(host != NULL);
 
-	if((name = malloc(strlen(host)+strlen(port)+2)) != NULL) {
+	if((name = malloc(ustrlen(host)+ustrlen(port)+2)) != NULL) {
 		name[0] = '\0';
-		strcat(name, host);
+		strcat(name, (char*)host);
 		strcat(name, ":");
-		strcat(name, port);
+		strcat(name, (char*)port);
 	} else {
 		errmsg.LogError(0, RS_RET_NO_ERRCODE, "Error: malloc failed");
 	}
