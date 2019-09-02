@@ -1128,6 +1128,7 @@ TESTS +=  \
 	sndrcv_tls_ossl_anon_ipv6.sh \
 	sndrcv_tls_ossl_anon_rebind.sh \
 	sndrcv_tls_ossl_serveranon_ossl_clientanon.sh \
+	sndrcv_tls_ossl_serveranon_ossl_clientcert.sh \
 	sndrcv_tls_ossl_servercert_ossl_clientanon.sh \
 	sndrcv_tls_ossl_certvalid.sh \
 	sndrcv_tls_ossl_certvalid_expired.sh \
@@ -2404,6 +2405,7 @@ EXTRA_DIST= \
 	sndrcv_tls_gtls_servercert_gtls_clientanon_legacy.sh \
 	sndrcv_tls_gtls_serveranon_gtls_clientanon.sh \
 	sndrcv_tls_ossl_serveranon_ossl_clientanon.sh \
+	sndrcv_tls_ossl_serveranon_ossl_clientcert.sh \
 	sndrcv_tls_ossl_servercert_ossl_clientanon.sh \
 	sndrcv_tls_ossl_servercert_gtls_clientanon.sh \
 	sndrcv_tls_ossl_serveranon_gtls_clientanon.sh \

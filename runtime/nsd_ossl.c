@@ -633,7 +633,7 @@ osslInitSession(nsd_ossl_t *pThis) /* , nsd_ossl_t *pServer) */
 		dbgprintf("osslInitSession: enable certificate checking (Mode=%d)\n", pThis->authMode);
 		/* Enable certificate valid checking */
 		SSL_set_verify(pThis->ssl, SSL_VERIFY_PEER|SSL_VERIFY_FAIL_IF_NO_PEER_CERT, verify_callback);
-		SSL_set_verify_depth(pThis->ssl, 2);
+		SSL_set_verify_depth(pThis->ssl, 4);
 	}
 
 	if (bAnonInit == 1) { /* no mutex needed, read-only after init */
@@ -1721,7 +1721,7 @@ Connect(nsd_t *pNsd, int family, uchar *port, uchar *host, char *device)
 		dbgprintf("Connect: enable certificate checking (Mode=%d)\n", pThis->authMode);
 		/* Enable certificate valid checking */
 		SSL_set_verify(pThis->ssl, SSL_VERIFY_PEER|SSL_VERIFY_FAIL_IF_NO_PEER_CERT, verify_callback);
-		SSL_set_verify_depth(pThis->ssl, 2);
+		SSL_set_verify_depth(pThis->ssl, 4);
 	}
 
 	if (bAnonInit == 1) { /* no mutex needed, read-only after init */
