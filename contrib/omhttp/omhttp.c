@@ -867,6 +867,9 @@ compressHttpPayload(wrkrInstanceData_t *pWrkrData, uchar *message, unsigned len)
 		if (zRet != Z_OK) {
 			DBGPRINTF("omhttp: compressHttpPayload error %d returned from zlib/deflateInit2()\n", zRet);
 			ABORT_FINALIZE(RS_RET_ZLIB_ERR);
+		} else {
+			DBGPRINTF("omhttp: compressHttpPayload  zlib/deflateInit2() with compressionelevel %d\n",
+				pWrkrData->pData->compressionLevel);
 		}
 		pWrkrData->bzInitDone = 1;
 	}
@@ -1810,6 +1813,7 @@ CODESTARTnewActInst
 			compressionLevel = pvals[i].val.d.n;
 			if (compressionLevel == -1 || (compressionLevel >= 0 && compressionLevel < 10)) {
 				pData->compressionLevel = compressionLevel;
+				DBGPRINTF("omhttp: compress.level = %d\n", pData->compressionLevel);
 			} else {
 				LogError(0, NO_ERRCODE, "omhttp: invalid compress.level %d using default instead,"
 					"valid levels are -1 and 0-9",
